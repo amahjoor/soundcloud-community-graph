@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import networkx as nx
 from scraper import SoundCloudScraper
+import json
 
 def parse_args():
     """Parse command-line arguments."""
@@ -298,11 +299,430 @@ def visualize_ego_network(account, account_data, interactions_df, data_dir, min_
         )
     )
     
-    # Save the interactive visualization
+    # Save the interactive visualization with advanced search and filtering
     interactive_file = os.path.join(ego_dir, f"{account}_network_interactive.html")
-    fig.write_html(interactive_file)
     
-    print(f"Interactive visualization saved to {interactive_file}")
+    # Create node and edge data for JavaScript
+    node_data = []
+    for i, node in enumerate(G.nodes()):
+        node_info = {
+            'id': node,
+            'x': pos[node][0],
+            'y': pos[node][1],
+            'size': node_size[i],
+            'color': node_color[i],
+            'text': node_text[i],
+            'isEgo': node == account
+        }
+        node_data.append(node_info)
+    
+    edge_data = []
+    for i, interaction_type in enumerate(interaction_types):
+        edges = [(u, v) for u, v in G.edges() if G[u][v].get('type') == interaction_type]
+        for u, v in edges:
+            edge_info = {
+                'source': u,
+                'target': v,
+                'type': interaction_type,
+                'weight': G[u][v]['weight']
+            }
+            edge_data.append(edge_info)
+    
+    # Export node and edge data as JSON for JavaScript
+    node_data_json = json.dumps(node_data)
+    edge_data_json = json.dumps(edge_data)
+    
+    # Create HTML with embedded JavaScript for search and filtering
+    with open(interactive_file, 'w') as f:
+        html_content = f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SoundCloud Ego Network: {account}</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 0; padding: 0; }}
+        .container {{ display: flex; height: 100vh; }}
+        .sidebar {{ 
+            width: 250px; background-color: #f8f8f8; padding: 20px; 
+            border-right: 1px solid #ddd; overflow-y: auto;
+            flex-shrink: 0;
+        }}
+        .main-content {{ 
+            flex-grow: 1; 
+            position: relative; 
+            width: calc(100% - 290px);
+            height: 100%;
+        }}
+        #graph {{ 
+            width: 100%; 
+            height: 100%; 
+        }}
+        h2 {{ margin-top: 0; font-size: 18px; }}
+        .filter-section {{ margin-bottom: 20px; }}
+        input[type="text"] {{ 
+            width: 100%; padding: 8px; margin-bottom: 10px;
+            border: 1px solid #ddd; border-radius: 4px;
+        }}
+        .checkbox-item {{ margin-bottom: 5px; }}
+        button {{ 
+            padding: 8px 12px; background-color: #4CAF50; color: white;
+            border: none; border-radius: 4px; cursor: pointer;
+            margin-right: 5px; margin-bottom: 5px;
+        }}
+        button:hover {{ background-color: #45a049; }}
+        button.reset {{ background-color: #f44336; }}
+        button.reset:hover {{ background-color: #d32f2f; }}
+        .stats {{ margin-top: 20px; }}
+        .stats p {{ margin: 5px 0; font-size: 14px; }}
+        #nodeCount, #edgeCount {{ font-weight: bold; }}
+        #loading {{ display: none; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <h2>SoundCloud Ego Network</h2>
+            <div class="filter-section">
+                <h3>Search</h3>
+                <input type="text" id="searchInput" placeholder="Search accounts...">
+                <div id="searchResults"></div>
+                <button id="clearSearch">Clear Search</button>
+            </div>
+            
+            <div class="filter-section">
+                <h3>Filter by Interaction Type</h3>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="likesFilter" checked>
+                    <label for="likesFilter">Likes</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="commentsFilter" checked>
+                    <label for="commentsFilter">Comments</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="followingFilter" checked>
+                    <label for="followingFilter">Following</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="repostsFilter" checked>
+                    <label for="repostsFilter">Reposts</label>
+                </div>
+            </div>
+            
+            <div class="filter-section">
+                <h3>Actions</h3>
+                <button id="applyFilters">Apply Filters</button>
+                <button id="resetGraph" class="reset">Reset Graph</button>
+            </div>
+            
+            <div class="stats">
+                <h3>Network Statistics</h3>
+                <p>Ego: <strong>{account}</strong></p>
+                <p>Followers: <strong>{account_data['followers']}</strong></p>
+                <p>Nodes: <span id="nodeCount">{G.number_of_nodes()}</span></p>
+                <p>Edges: <span id="edgeCount">{G.number_of_edges()}</span></p>
+                <div id="loading">Loading...</div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div id="graph"></div>
+        </div>
+    </div>
+
+    <script>
+        // Node and edge data
+        const allNodes = {node_data_json};
+        const allEdges = {edge_data_json};
+        
+        // Current state
+        let currentNodes = [...allNodes];
+        let currentEdges = [...allEdges];
+        let graph = null;
+        let searchTerm = '';
+        
+        // Colors for different interaction types
+        const colors = {{
+            'likes': 'rgba(31, 119, 180, 0.6)',
+            'comments': 'rgba(255, 127, 14, 0.6)',
+            'following': 'rgba(44, 160, 44, 0.6)',
+            'reposts': 'rgba(214, 39, 40, 0.6)'
+        }};
+        
+        // Create the initial graph
+        function createGraph() {{
+            const edgeTraces = createEdgeTraces(currentEdges);
+            const nodeTrace = createNodeTrace(currentNodes);
+            
+            const layout = {{
+                title: 'SoundCloud Ego Network: {account}',
+                showlegend: true,
+                hovermode: 'closest',
+                margin: {{b: 20, l: 5, r: 5, t: 40}},
+                xaxis: {{showgrid: false, zeroline: false, showticklabels: false}},
+                yaxis: {{showgrid: false, zeroline: false, showticklabels: false}},
+                width: document.querySelector('.main-content').offsetWidth,
+                height: document.querySelector('.main-content').offsetHeight - 20,
+                autosize: true
+            }};
+            
+            graph = Plotly.newPlot('graph', [...edgeTraces, nodeTrace], layout);
+            
+            // Update stats
+            document.getElementById('nodeCount').textContent = currentNodes.length;
+            document.getElementById('edgeCount').textContent = currentEdges.length;
+            
+            // Handle window resize
+            window.addEventListener('resize', function() {{
+                Plotly.relayout('graph', {{
+                    width: document.querySelector('.main-content').offsetWidth,
+                    height: document.querySelector('.main-content').offsetHeight - 20
+                }});
+            }});
+        }}
+        
+        // Create edge traces by interaction type
+        function createEdgeTraces(edges) {{
+            const edgesByType = {{}};
+            
+            // Group edges by type
+            edges.forEach(edge => {{
+                if (!edgesByType[edge.type]) {{
+                    edgesByType[edge.type] = [];
+                }}
+                edgesByType[edge.type].push(edge);
+            }});
+            
+            const traces = [];
+            
+            // Create a trace for each type
+            for (const type in edgesByType) {{
+                const edgeList = edgesByType[type];
+                const x = [];
+                const y = [];
+                
+                edgeList.forEach(edge => {{
+                    const source = allNodes.find(n => n.id === edge.source);
+                    const target = allNodes.find(n => n.id === edge.target);
+                    
+                    if (source && target) {{
+                        x.push(source.x, target.x, null);
+                        y.push(source.y, target.y, null);
+                    }}
+                }});
+                
+                const trace = {{
+                    x: x,
+                    y: y,
+                    mode: 'lines',
+                    line: {{
+                        width: 1,
+                        color: colors[type] || 'rgba(128, 128, 128, 0.6)'
+                    }},
+                    hoverinfo: 'none',
+                    name: type.charAt(0).toUpperCase() + type.slice(1)
+                }};
+                
+                traces.push(trace);
+            }}
+            
+            return traces;
+        }}
+        
+        // Create node trace
+        function createNodeTrace(nodes) {{
+            const x = [];
+            const y = [];
+            const text = [];
+            const sizes = [];
+            const colors = [];
+            
+            nodes.forEach(node => {{
+                x.push(node.x);
+                y.push(node.y);
+                text.push(node.text);
+                sizes.push(node.size);
+                colors.push(node.color);
+            }});
+            
+            return {{
+                x: x,
+                y: y,
+                mode: 'markers',
+                hoverinfo: 'text',
+                text: text,
+                marker: {{
+                    size: sizes,
+                    color: colors,
+                    line: {{
+                        width: 1,
+                        color: 'black'
+                    }}
+                }},
+                name: 'Accounts'
+            }};
+        }}
+        
+        // Apply search filter
+        function applySearch() {{
+            searchTerm = document.getElementById('searchInput').value.toLowerCase().trim();
+            
+            if (!searchTerm) {{
+                return false;
+            }}
+            
+            // Find matching nodes
+            const matchingNodes = allNodes.filter(node => 
+                node.text.toLowerCase().includes(searchTerm) || node.id.toLowerCase().includes(searchTerm)
+            );
+            
+            // If no matches, alert user
+            if (matchingNodes.length === 0) {{
+                alert('No accounts found matching "' + searchTerm + '"');
+                return false;
+            }}
+            
+            // Show only matching nodes and the ego node
+            currentNodes = allNodes.filter(node => 
+                matchingNodes.some(match => match.id === node.id) || node.isEgo
+            );
+            
+            // Show only edges connected to matching nodes
+            currentEdges = allEdges.filter(edge => 
+                currentNodes.some(node => node.id === edge.source) && 
+                currentNodes.some(node => node.id === edge.target)
+            );
+            
+            // Also apply type filters
+            applyTypeFilters();
+            
+            return true;
+        }}
+        
+        // Apply interaction type filters
+        function applyTypeFilters() {{
+            const showLikes = document.getElementById('likesFilter').checked;
+            const showComments = document.getElementById('commentsFilter').checked;
+            const showFollowing = document.getElementById('followingFilter').checked;
+            const showReposts = document.getElementById('repostsFilter').checked;
+            
+            let filteredEdges;
+            
+            // If we have a search term active, filter from current edges
+            if (searchTerm) {{
+                filteredEdges = currentEdges.filter(edge => {{
+                    if (edge.type === 'likes' && !showLikes) return false;
+                    if (edge.type === 'comments' && !showComments) return false;
+                    if (edge.type === 'following' && !showFollowing) return false;
+                    if (edge.type === 'reposts' && !showReposts) return false;
+                    return true;
+                }});
+            }} else {{
+                // Otherwise, start fresh from all edges
+                filteredEdges = allEdges.filter(edge => {{
+                    if (edge.type === 'likes' && !showLikes) return false;
+                    if (edge.type === 'comments' && !showComments) return false;
+                    if (edge.type === 'following' && !showFollowing) return false;
+                    if (edge.type === 'reposts' && !showReposts) return false;
+                    return true;
+                }});
+            }}
+            
+            currentEdges = filteredEdges;
+            
+            // Update nodes to show only those connected by edges plus ego
+            const connectedNodeIds = new Set();
+            connectedNodeIds.add('{account}'); // Always include ego node
+            
+            currentEdges.forEach(edge => {{
+                connectedNodeIds.add(edge.source);
+                connectedNodeIds.add(edge.target);
+            }});
+            
+            currentNodes = allNodes.filter(node => connectedNodeIds.has(node.id));
+            
+            return true;
+        }}
+        
+        // Reset graph to initial state
+        function resetGraph() {{
+            document.getElementById('searchInput').value = '';
+            document.getElementById('likesFilter').checked = true;
+            document.getElementById('commentsFilter').checked = true;
+            document.getElementById('followingFilter').checked = true;
+            document.getElementById('repostsFilter').checked = true;
+            
+            searchTerm = '';
+            currentNodes = [...allNodes];
+            currentEdges = [...allEdges];
+            
+            updateGraph();
+        }}
+        
+        // Update the graph with current filters
+        function updateGraph() {{
+            document.getElementById('loading').style.display = 'block';
+            
+            setTimeout(() => {{
+                const edgeTraces = createEdgeTraces(currentEdges);
+                const nodeTrace = createNodeTrace(currentNodes);
+                
+                Plotly.react('graph', [...edgeTraces, nodeTrace], {{
+                    title: 'SoundCloud Ego Network: {account}',
+                    showlegend: true,
+                    hovermode: 'closest',
+                    margin: {{b: 20, l: 5, r: 5, t: 40}},
+                    xaxis: {{showgrid: false, zeroline: false, showticklabels: false}},
+                    yaxis: {{showgrid: false, zeroline: false, showticklabels: false}},
+                    width: document.querySelector('.main-content').offsetWidth,
+                    height: document.querySelector('.main-content').offsetHeight - 20
+                }});
+                
+                // Update stats
+                document.getElementById('nodeCount').textContent = currentNodes.length;
+                document.getElementById('edgeCount').textContent = currentEdges.length;
+                
+                document.getElementById('loading').style.display = 'none';
+            }}, 50);
+        }}
+        
+        // Event listeners
+        document.getElementById('applyFilters').addEventListener('click', () => {{
+            applyTypeFilters();
+            updateGraph();
+        }});
+        
+        document.getElementById('resetGraph').addEventListener('click', resetGraph);
+        
+        document.getElementById('clearSearch').addEventListener('click', () => {{
+            document.getElementById('searchInput').value = '';
+            searchTerm = '';
+            
+            // Reset to all nodes then apply type filters
+            currentNodes = [...allNodes];
+            applyTypeFilters();
+            updateGraph();
+        }});
+        
+        document.getElementById('searchInput').addEventListener('keyup', (e) => {{
+            if (e.key === 'Enter') {{
+                if (applySearch()) {{
+                    updateGraph();
+                }}
+            }}
+        }});
+        
+        // Initialize graph
+        document.addEventListener('DOMContentLoaded', createGraph);
+    </script>
+</body>
+</html>
+        '''
+        
+        f.write(html_content)
+    
+    print(f"Interactive visualization with search and filtering saved to {interactive_file}")
     
     # Print some basic network statistics
     print("\nNetwork Statistics:")
