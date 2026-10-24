@@ -1,4 +1,6 @@
 __pycache__/
-/venv/
+*.pyc
+.venv/
+venv/
 /data/
-README.md
+.DS_Store
